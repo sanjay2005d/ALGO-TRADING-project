@@ -9,8 +9,10 @@ import joblib
 # 📁 Define your data folder and stock list
 data_folder = "stock_data"
 stocks = ['TCS', 'INFY', 'HDFCBANK', 'RELIANCE', 'BHARTIARTL', 'ICICIBANK']
+features = ['RSI', '20DMA', '50DMA', 'Close']
+target = 'Signal'
 
-# 🧹 Combine all stock data
+# 🧹 Combine all stock data for training
 combined_df = pd.DataFrame()
 
 for stock in stocks:
@@ -19,65 +21,73 @@ for stock in stocks:
         print(f"❌ Missing: {file_path}")
         continue
     df = pd.read_csv(file_path)
-    df['Stock'] = stock  # add stock column for traceability
+    df['Stock'] = stock
     combined_df = pd.concat([combined_df, df], ignore_index=True)
 
-# 🧠 Select features and target
-features = ['RSI', '20DMA', '50DMA', 'Close']
-target = 'Signal'
-
-# 🔍 Drop rows with missing values
+# 🧠 Clean and prepare data
 combined_df.dropna(subset=features + [target], inplace=True)
-
-# 🔢 Encode the Signal column (Buy, Sell, Hold) → (0,1,2)
 label_encoder = LabelEncoder()
 combined_df['Signal_encoded'] = label_encoder.fit_transform(combined_df[target])
 
 X = combined_df[features]
 y = combined_df['Signal_encoded']
 
-# 🎯 Train-Test Split
+# 🎯 Train-test split
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# 🌲 Train the Random Forest Classifier
+# 🌲 Train the model
 model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
 model.fit(X_train, y_train)
 
-# 💾 Save the model and encoder
+# 💾 Save model and label encoder
 joblib.dump(model, "trained_model.pkl")
 joblib.dump(label_encoder, "label_encoder.pkl")
 
-# 📈 Evaluate the model
+# 📊 Evaluate model
 y_pred = model.predict(X_test)
 print("\n📊 Classification Report:")
 print(classification_report(y_test, y_pred, target_names=label_encoder.classes_))
 
-# 🧪 Predict on existing data (TCS) for verification
+# 🧪 Sample predictions on TCS
 tcs_df = combined_df[combined_df['Stock'] == 'TCS'].copy()
 tcs_df['Predicted_Signal'] = label_encoder.inverse_transform(model.predict(tcs_df[features]))
-
 print("\n📍 Sample Predictions on TCS:")
 print(tcs_df[['Date', 'RSI', '20DMA', '50DMA', 'Close', 'Signal', 'Predicted_Signal']].tail(10))
 
-# 🆕 Inference on new daily data
-new_data_path = "new_data.csv"
-if os.path.exists(new_data_path):
-    new_df = pd.read_csv(new_data_path)
-    print("\n📅 Predicting on new_data.csv...")
+# 📦 Inference on latest row of each stock
+print("\n📅 Running inference for latest row of all stocks...")
+latest_predictions = []
 
-    # Drop rows with missing values
-    new_df.dropna(subset=features, inplace=True)
+for stock in stocks:
+    file_path = os.path.join(data_folder, f"{stock}_signals.csv")
+    if not os.path.exists(file_path):
+        print(f"❌ Missing: {file_path}")
+        continue
 
-    # Predict using trained model
-    new_predictions = model.predict(new_df[features])
-    new_df['Predicted_Signal'] = label_encoder.inverse_transform(new_predictions)
+    stock_df = pd.read_csv(file_path)
+    stock_df.dropna(subset=features, inplace=True)
+    
+    if stock_df.empty:
+        print(f"⚠️ No valid data for {stock}. Skipping.")
+        continue
 
-    print("\n📢 New Data Predictions:")
-    print(new_df[['Date', 'RSI', '20DMA', '50DMA', 'Close', 'Predicted_Signal']].tail(10))
+    stock_df['Predicted_Signal'] = label_encoder.inverse_transform(
+        model.predict(stock_df[features])
+    )
+    
+    # Get the last row (assumed to be today's data)
+    latest_row = stock_df.iloc[-1].copy()
+    latest_row['Stock'] = stock
+    latest_predictions.append(latest_row)
 
-    # Save predictions
-    new_df.to_csv("predicted_new_data.csv", index=False)
+# 📝 Save all latest predictions to one CSV
+if latest_predictions:
+    prediction_df = pd.DataFrame(latest_predictions)
+    prediction_df.to_csv("predicted_new_data.csv", index=False)
+    print("\n✅ Combined latest predictions saved to predicted_new_data.csv")
+    print(prediction_df[['Date', 'Stock', 'RSI', '20DMA', '50DMA', 'Close', 'Predicted_Signal']])
 else:
-    print("⚠️ new_data.csv not found. Skipping prediction on new data.")
+    print("⚠️ No predictions made due to missing or invalid stock data.")
+
